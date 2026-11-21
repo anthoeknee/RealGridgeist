@@ -15,32 +15,40 @@ export class PlayerRepository {
   private db: Database;
 
   // Prepared Statements
-  private stmtUpsertPlayer: Statement;
-  private stmtGetPlayer: Statement;
-  private stmtGetRecentFacts: Statement;
-  private stmtFindFact: Statement;
-  private stmtInsertFact: Statement;
-  private stmtUpdateFact: Statement;
-  private stmtAdjustAffinity: Statement;
-  private stmtSetAffinity: Statement;
-  private stmtUpdatePreferredName: Statement;
-  private stmtUpdateSummary: Statement;
-  private stmtDeleteFactsByUser: Statement;
-  private stmtDeletePlayer: Statement;
-  private stmtGetBotMood: Statement;
-  private stmtUpsertBotMood: Statement;
+  private stmtUpsertPlayer!: Statement;
+  private stmtGetPlayer!: Statement;
+  private stmtGetRecentFacts!: Statement;
+  private stmtFindFact!: Statement;
+  private stmtInsertFact!: Statement;
+  private stmtUpdateFact!: Statement;
+  private stmtAdjustAffinity!: Statement;
+  private stmtSetAffinity!: Statement;
+  private stmtUpdatePreferredName!: Statement;
+  private stmtUpdateSummary!: Statement;
+  private stmtDeleteFactsByUser!: Statement;
+  private stmtDeletePlayer!: Statement;
+  private stmtGetBotMood!: Statement;
+  private stmtUpsertBotMood!: Statement;
 
   // Transactions
-  private txAddFactsAndAdjustAffinity: (
+  private txAddFactsAndAdjustAffinity!: (
     userId: string,
     facts: FactInput[],
     affinityDelta?: number,
   ) => { player: Player | null; facts: PlayerFact[] };
-  private txDeletePlayer: (userId: string) => boolean;
+  private txDeletePlayer!: (userId: string) => boolean;
 
   constructor(database?: Database) {
     this.db = database ?? getDatabase();
+    this.initStatements();
+  }
 
+  public setDatabase(database: Database): void {
+    this.db = database;
+    this.initStatements();
+  }
+
+  private initStatements(): void {
     // 1. Player statements
     this.stmtUpsertPlayer = this.db.prepare(`
       INSERT INTO players (

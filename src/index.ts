@@ -1,5 +1,6 @@
 import { Client, type ParseClient } from "seyfert";
-import { closeDatabase } from "./memory/db";
+import { env } from "./env";
+import { initDatabase, closeDatabase, defaultMessageBuffer } from "./memory";
 
 declare module "seyfert" {
   interface SeyfertRegistry {
@@ -18,6 +19,7 @@ function handleShutdown(signal: string) {
   } catch (error) {
     client.logger.error("Error while disconnecting gateway shards:", error);
   }
+  defaultMessageBuffer.stopCleanupTimer();
   closeDatabase();
   process.exit(0);
 }
@@ -26,6 +28,12 @@ process.on("SIGINT", () => handleShutdown("SIGINT"));
 process.on("SIGTERM", () => handleShutdown("SIGTERM"));
 
 if (import.meta.main) {
+  client.logger.info(`Starting bot in ${env.NODE_ENV} mode...`);
+
+  // Initialize SQLite database and run migrations before connecting
+  initDatabase(env.DATABASE_PATH);
+  client.logger.info(`SQLite memory layer connected at ${env.DATABASE_PATH}`);
+
   client
     .start()
     .then(() => client.uploadCommands())

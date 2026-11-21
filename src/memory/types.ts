@@ -73,3 +73,36 @@ export interface UpsertBotMoodInput {
   current_vibe?: string;
   updated_at?: string;
 }
+
+export const bufferedMessageSchema = z.object({
+  authorId: z.string().min(1),
+  authorName: z.string().min(1),
+  isBot: z.boolean(),
+  content: z.string(),
+  timestamp: z.number().int().nonnegative(),
+  replyToAuthorName: z.string().nullable().optional(),
+});
+
+export type BufferedMessage = z.infer<typeof bufferedMessageSchema>;
+
+export interface AddBufferedMessageInput {
+  authorId: string;
+  authorName: string;
+  isBot?: boolean;
+  content: string;
+  timestamp?: number | Date;
+  replyToAuthorName?: string | null;
+}
+
+export interface FormatBufferOptions {
+  limit?: number;
+  includeBotTag?: boolean;
+  includeReplies?: boolean;
+}
+
+export interface ChannelBufferOptions {
+  maxMessages?: number;
+  ttlMs?: number;
+  cleanupIntervalMs?: number;
+  autoStartCleanup?: boolean;
+}
