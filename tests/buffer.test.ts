@@ -1,10 +1,12 @@
 import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import {
   ChannelMessageBuffer,
+  defaultMessageBuffer,
   channelBuffers,
   addMessageToBuffer,
   getBuffer,
   formatBufferForPrompt,
+  getConversationHistory,
   clearBuffer,
   clearAllBuffers,
   pruneExpiredBuffers,
@@ -526,6 +528,76 @@ describe("Short-Term Channel Message Buffer", () => {
 
       expect(lines[0]).toBe("Alice (replying to Bob): Message with extra spaces");
       expect(lines[1]).toBe("Bob: [empty message]");
+    });
+  });
+
+  describe("Multi-Turn Conversation Turns (getConversationHistory)", () => {
+    it("returns empty array for empty or uninitialized channels", () => {
+      const history = defaultMessageBuffer.getConversationHistory("non-existent-ch");
+      expect(history).toEqual([]);
+    });
+
+    it("formats user and bot turns with appropriate roles and speaker labels", () => {
+      addMessageToBuffer("ch-conv", {
+        authorId: "user-1",
+        authorName: "Alice",
+        content: "What is the square root of 64?",
+      });
+      addMessageToBuffer("ch-conv", {
+        authorId: "bot-1",
+        authorName: "Gridgeist",
+        isBot: true,
+        content: "The square root of 64 is 8.",
+      });
+      addMessageToBuffer("ch-conv", {
+        authorId: "user-2",
+        authorName: "Bob",
+        content: "Thanks!",
+        replyToAuthorName: "Gridgeist",
+      });
+
+      const turns = defaultMessageBuffer.getConversationHistory("ch-conv");
+      expect(turns).toHaveLength(3);
+      expect(turns[0]).toEqual({
+        role: "user",
+        content: "[Alice]: What is the square root of 64?",
+        authorName: "Alice",
+        isBot: false,
+      });
+      expect(turns[1]).toEqual({
+        role: "model",
+        content: "The square root of 64 is 8.",
+        authorName: "Gridgeist",
+        isBot: true,
+      });
+      expect(turns[2]).toEqual({
+        role: "user",
+        content: "[Bob (replying to Gridgeist)]: Thanks!",
+        authorName: "Bob",
+        isBot: false,
+      });
+    });
+
+    it("supports excludeLast: true to exclude the current active prompt message", () => {
+      addMessageToBuffer("ch-turns", { authorId: "u1", authorName: "Alice", content: "Turn 1" });
+      addMessageToBuffer("ch-turns", { authorId: "b1", authorName: "Gridgeist", isBot: true, content: "Turn 2" });
+      addMessageToBuffer("ch-turns", { authorId: "u1", authorName: "Alice", content: "Turn 3 (current prompt)" });
+
+      const priorTurns = defaultMessageBuffer.getConversationHistory("ch-turns", { excludeLast: true });
+      expect(priorTurns).toHaveLength(2);
+      expect(priorTurns[0].content).toContain("Turn 1");
+      expect(priorTurns[1].content).toBe("Turn 2");
+    });
+
+    it("limits turns cleanly with options.limit", () => {
+      for (let i = 1; i <= 5; i++) {
+        addMessageToBuffer("ch-limit", { authorId: "u1", authorName: "Alice", content: `Msg ${i}` });
+      }
+
+      const turns = defaultMessageBuffer.getConversationHistory("ch-limit", { limit: 2 });
+      expect(turns).toHaveLength(2);
+      expect(turns[0].content).toContain("Msg 4");
+      expect(turns[1].content).toContain("Msg 5");
     });
   });
 

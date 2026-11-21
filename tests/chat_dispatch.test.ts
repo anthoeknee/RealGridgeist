@@ -4,7 +4,7 @@ import type { GoogleGenAI } from "@google/genai";
 import { initDatabase } from "../src/memory/db";
 import { playerRepo } from "../src/memory/playerRepo";
 import { getBuffer, clearAllBuffers } from "../src/memory/buffer";
-import { setGeminiClient, resetAiClients } from "../src/ai/provider";
+import { setGeminiClient, resetAiClients, setDefaultAiProvider } from "../src/ai/provider";
 import { SlidingWindowRateLimiter, defaultRateLimiter } from "../src/chat/rateLimiter";
 import { handleChatMessage } from "../src/chat/dispatch";
 import messageCreateEvent from "../src/events/messageCreate";
@@ -127,12 +127,14 @@ describe("Chat Dispatch Pipeline Integration (tests/chat_dispatch.test.ts)", () 
     clearAllBuffers();
     defaultRateLimiter.clear();
     resetAiClients();
+    setDefaultAiProvider("gemini");
   });
 
   afterEach(() => {
     clearAllBuffers();
     defaultRateLimiter.clear();
     resetAiClients();
+    setDefaultAiProvider("gemini");
     db.close();
   });
 

@@ -987,7 +987,7 @@ describe("AI Provider Module (src/ai/provider.ts)", () => {
     });
 
     it("allows switching default provider dynamically with setDefaultAiProvider", () => {
-      expect(getDefaultAiProvider()).toBe("gemini");
+      const initialProvider = getDefaultAiProvider();
 
       setDefaultAiProvider("groq");
       expect(getDefaultAiProvider()).toBe("groq");
@@ -997,6 +997,9 @@ describe("AI Provider Module (src/ai/provider.ts)", () => {
 
       setDefaultAiProvider("gemini");
       expect(getDefaultAiProvider()).toBe("gemini");
+
+      // Restore initial state
+      setDefaultAiProvider(initialProvider);
     });
 
     it("routes to Groq automatically when default provider is set to groq", async () => {

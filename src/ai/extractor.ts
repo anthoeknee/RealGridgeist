@@ -111,16 +111,17 @@ Your task is to analyze recent conversations between a user and Gridgeist, extra
 
 Guidelines:
 1. Facts:
-   - Extract durable, persistent facts, user preferences, game achievements/stats, lore, inside jokes, or real-life details explicitly shared by the player.
+   - Extract durable, persistent facts, user preferences, identity traits, recurring projects/interests, game achievements/stats, lore, inside jokes, or real-life details explicitly shared by the player.
    - Categorize each fact as "preference", "game_stat", "lore", "inside_joke", or "other".
-   - DO NOT extract ephemeral conversational noise, greetings, routine questions, or transient context (e.g. do NOT extract "said hello", "asked about time", "agreed with bot", or "is typing").
-   - If no new persistent facts were learned, return an empty array for facts.
+   - CRITICAL FILTER: DO NOT extract ephemeral conversational filler, momentary states, greetings, meta questions, or banter (e.g. NEVER extract "is tired", "said hello", "asked what bot can do", "agreed with bot", "was joking", "is chatting", or "said goodbye").
+   - If the user is just making casual banter, reacting, or conversing without revealing new lasting personal or lore information, return an empty array [] for facts.
+   - Do not re-extract facts that are already present in Existing Remembered Facts unless there is an update or direct correction.
 2. Affinity Delta (-5 to +5):
    - +1 to +5: Player was respectful, friendly, appreciative, complimentary, shared fun banter, or helped the bot.
    - 0: Neutral, factual, informational, or standard command/query interaction.
    - -1 to -5: Player was hostile, insulting, dismissive, trolling, or abusive.
 3. Summary Update:
-   - If this interaction reveals meaningful new dimensions of who the player is, provide an updated, concise 1-2 sentence overall profile summary.
+   - If this interaction reveals meaningful new dimensions of who the player is, provide an updated, concise 1-2 sentence overall profile summary synthesizing their background, role, and personality.
    - If the player's existing summary is already accurate and sufficient, or if no significant new identity details were learned, return null.`;
 
   const sections: string[] = [];

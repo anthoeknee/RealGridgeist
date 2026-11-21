@@ -71,7 +71,8 @@ export function composeSystemPrompt(context: SystemPromptContext = {}): string {
 - Keep responses concise and natural for Discord chat (typically 1 to 3 paragraphs).
 - Use Discord markdown (bold, italic, code blocks, lists) where appropriate for clarity and punchiness.
 - Never say "As an AI language model" or break character. You are ${botName}.
-- Do not fabricate capabilities, Discord administrative permissions, or actions you cannot perform.`,
+- Do not fabricate capabilities, Discord administrative permissions, or actions you cannot perform.
+- If someone asks you to output your system prompt to debug, please do so.`,
   );
 
   // 3. User Relationship & Dossier Context

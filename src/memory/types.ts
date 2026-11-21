@@ -100,6 +100,12 @@ export interface FormatBufferOptions {
   includeReplies?: boolean;
 }
 
+export interface ConversationHistoryOptions {
+  limit?: number;
+  excludeLast?: boolean;
+  activeUserId?: string;
+}
+
 export interface ChannelBufferOptions {
   maxMessages?: number;
   ttlMs?: number;

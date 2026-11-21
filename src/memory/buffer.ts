@@ -2,6 +2,7 @@ import type {
   BufferedMessage,
   AddBufferedMessageInput,
   FormatBufferOptions,
+  ConversationHistoryOptions,
   ChannelBufferOptions,
 } from "./types";
 
@@ -164,6 +165,51 @@ export class ChannelMessageBuffer {
   }
 
   /**
+   * Retrieves structured conversation history turns suitable for LLM multi-turn APIs (Gemini/Groq).
+   * Maps messages into roles ("user" | "model") with author attribution on group messages,
+   * with options to limit the count and exclude the trailing prompt message to avoid duplicate context.
+   */
+  public getConversationHistory(
+    channelId: string,
+    options?: ConversationHistoryOptions,
+    now: number = Date.now(),
+  ): Array<{ role: "user" | "model"; content: string; authorName?: string; isBot?: boolean }> {
+    const rawMessages = this.getMessages(channelId, now);
+    if (rawMessages.length === 0) {
+      return [];
+    }
+
+    const messages = options?.excludeLast ? rawMessages.slice(0, -1) : rawMessages;
+    const targetMessages =
+      options?.limit && options.limit > 0
+        ? messages.slice(-options.limit)
+        : messages;
+
+    return targetMessages.map((msg) => {
+      if (msg.isBot) {
+        return {
+          role: "model" as const,
+          content: msg.content.trim(),
+          authorName: msg.authorName,
+          isBot: true,
+        };
+      }
+
+      // Format speaker attribution so the LLM knows who said what in multi-user channels
+      const speaker = msg.authorName.trim() || msg.authorId;
+      const replyContext = msg.replyToAuthorName ? ` (replying to ${msg.replyToAuthorName})` : "";
+      const content = `[${speaker}${replyContext}]: ${msg.content.trim()}`;
+
+      return {
+        role: "user" as const,
+        content,
+        authorName: msg.authorName,
+        isBot: false,
+      };
+    });
+  }
+
+  /**
    * Formats the recent chat history of a channel into a clean dialogue script
    * showing who said what, clearly distinguishing multiple human speakers, bot responses,
    * and message replies.
@@ -273,6 +319,17 @@ export function addMessageToBuffer(
  */
 export function getBuffer(channelId: string, now?: number): BufferedMessage[] {
   return defaultMessageBuffer.getMessages(channelId, now);
+}
+
+/**
+ * Convenience wrapper: retrieves structured conversation history turns for LLMs.
+ */
+export function getConversationHistory(
+  channelId: string,
+  options?: ConversationHistoryOptions,
+  now?: number,
+): Array<{ role: "user" | "model"; content: string; authorName?: string; isBot?: boolean }> {
+  return defaultMessageBuffer.getConversationHistory(channelId, options, now);
 }
 
 /**

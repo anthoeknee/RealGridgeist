@@ -2,7 +2,12 @@ import type { MessageStructure } from "seyfert/lib/client/transformers";
 import type { UsingClient } from "seyfert/lib/commands";
 import { defaultRateLimiter, SlidingWindowRateLimiter } from "./rateLimiter";
 import { playerRepo, PlayerRepository } from "../memory/playerRepo";
-import { formatBufferForPrompt, addMessageToBuffer, ChannelMessageBuffer } from "../memory/buffer";
+import {
+  formatBufferForPrompt,
+  addMessageToBuffer,
+  getConversationHistory,
+  ChannelMessageBuffer,
+} from "../memory/buffer";
 import { composeSystemPrompt } from "../ai/prompt";
 import { generateChatReply, type AiProviderName } from "../ai/provider";
 import { extractMemories, type ExtractMemoriesResult } from "../ai/extractor";
@@ -111,10 +116,16 @@ export async function handleChatMessage(
 
   const repo = options.playerRepository ?? playerRepo;
 
-  // 3. Load Context: Dossier + Mood + Formatted Buffer
+  // 3. Load Context: Dossier + Mood + Formatted Buffer + Structured Multi-Turn Turns
   const dossier = repo.getPlayerDossier(userId);
   const guildMood = message.guildId ? repo.getBotMood(message.guildId) : null;
   const formattedBuffer = formatBufferForPrompt(message.channelId);
+
+  // Retrieve prior turns excluding the message just buffered, so history is not duplicated
+  const conversationHistory = getConversationHistory(message.channelId, {
+    excludeLast: true,
+    limit: 12,
+  });
 
   // Clean mention tokens (<@botId>, <@!botId>) from the user's prompt text
   let userMessage = message.content ?? "";
@@ -141,6 +152,7 @@ export async function handleChatMessage(
   try {
     replyText = await generateReply({
       systemPrompt,
+      conversationHistory,
       userMessage,
       provider: options.aiProvider,
       model: options.model,
