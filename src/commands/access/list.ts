@@ -4,7 +4,7 @@ import { permissionRepo } from "../../permissions";
 
 @Declare({
   name: "list",
-  description: "List all configured role permission scopes for this server",
+  description: "View all role permissions configured for this server",
   props: { access: "admin" },
 })
 export default class ListSubcommand extends SubCommand {
@@ -21,7 +21,8 @@ export default class ListSubcommand extends SubCommand {
 
     if (records.length === 0) {
       await ctx.write({
-        content: "📋 No role permission scopes are configured for this server.",
+        content:
+          "📋 **No custom role permissions are set for this server.**\n\nBy default, Server Administrators, the Server Owner, and Bot Developers have access to all commands.",
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -34,10 +35,15 @@ export default class ListSubcommand extends SubCommand {
       byRole.set(r.role_id, list);
     }
 
-    const lines = ["🛡️ **Configured Role Permission Scopes:**"];
-    for (const [roleId, scopes] of byRole.entries()) {
-      lines.push(`• <@&${roleId}>: ${scopes.map((s) => `\`${s}\``).join(", ")}`);
-    }
+    const lines = [
+      "🛡️ **Configured Role Permissions:**",
+      "",
+      ...Array.from(byRole.entries()).map(
+        ([roleId, scopes]) => `• <@&${roleId}>: ${scopes.map((s) => `\`${s}\``).join(", ")}`,
+      ),
+      "",
+      "💡 *Server Administrators, the Server Owner, and Bot Developers automatically have access to all commands.*",
+    ];
 
     await ctx.write({
       content: lines.join("\n"),

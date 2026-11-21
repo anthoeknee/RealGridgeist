@@ -9,7 +9,8 @@ import { playerRepo } from "../memory/playerRepo";
 export default class ForgetCommand extends Command {
   override async run(ctx: CommandContext) {
     const userId = ctx.author.id;
-    const deleted = playerRepo.deletePlayer(userId);
+    const repo = ctx.client?.repositories?.player ?? playerRepo;
+    const deleted = repo.deletePlayer(userId);
 
     if (deleted) {
       await ctx.write({

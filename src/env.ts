@@ -7,6 +7,8 @@ export const envSchema = z.object({
   DEFAULT_AI_PROVIDER: z.enum(["gemini", "groq"]).default("gemini"),
   DATABASE_PATH: z.string().default("./data/bot.sqlite"),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+  BOT_OWNER_ID: z.string().optional(),
+  OWNER_ID: z.string().optional(),
   DEVELOPER_IDS: z
     .string()
     .optional()
@@ -21,7 +23,9 @@ export const envSchema = z.object({
     }),
 });
 
-export type Env = z.infer<typeof envSchema>;
+export type Env = z.infer<typeof envSchema> & {
+  resolvedOwnerId?: string;
+};
 
 export function parseEnv(raw: Record<string, string | undefined> = Bun.env): Env {
   const result = envSchema.safeParse(raw);
@@ -30,7 +34,16 @@ export function parseEnv(raw: Record<string, string | undefined> = Bun.env): Env
     console.error("❌ Invalid environment variables:", formattedErrors);
     throw new Error(`Invalid environment configuration: ${JSON.stringify(formattedErrors)}`);
   }
-  return result.data;
+  const data = result.data;
+  const resolvedOwnerId =
+    data.BOT_OWNER_ID ??
+    data.OWNER_ID ??
+    (data.DEVELOPER_IDS.size > 0 ? Array.from(data.DEVELOPER_IDS)[0] : undefined);
+
+  return {
+    ...data,
+    resolvedOwnerId,
+  };
 }
 
 // Under test runners without a populated .env, provide placeholder values

@@ -11,24 +11,24 @@ import { permissionRepo } from "../../permissions";
 
 const options = {
   role: createRoleOption({
-    description: "The server role to revoke access from",
+    description: "The server role to revoke permissions from",
     required: true,
   }),
   scope: createStringOption({
-    description: "The permission scope to revoke",
+    description: "The bot feature scope to revoke",
     required: true,
     choices: [
-      { name: "all (*)", value: "all" },
-      { name: "memory", value: "memory" },
-      { name: "config", value: "config" },
-      { name: "chat", value: "chat" },
+      { name: "all — All bot features (*)", value: "all" },
+      { name: "memory — Player memory & data (/forget)", value: "memory" },
+      { name: "config — Bot & server configuration", value: "config" },
+      { name: "chat — AI chat & conversations", value: "chat" },
     ] as const,
   }),
 };
 
 @Declare({
   name: "revoke",
-  description: "Revoke a permission scope from a role",
+  description: "Revoke a bot feature permission (scope) from a server role",
   props: { access: "admin" },
 })
 @Options(options)
@@ -47,12 +47,12 @@ export default class RevokeSubcommand extends SubCommand {
 
     if (removed) {
       await ctx.write({
-        content: `✅ Revoked permission scope \`${scope}\` from role <@&${role.id}>.`,
+        content: `✅ Revoked **\`${scope}\`** permission from role <@&${role.id}>.`,
         flags: MessageFlags.Ephemeral,
       });
     } else {
       await ctx.write({
-        content: `ℹ️ Role <@&${role.id}> does not have the \`${scope}\` permission scope.`,
+        content: `ℹ️ Role <@&${role.id}> does not have the **\`${scope}\`** permission scope.`,
         flags: MessageFlags.Ephemeral,
       });
     }

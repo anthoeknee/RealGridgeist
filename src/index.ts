@@ -1,8 +1,22 @@
 import { Client, type ParseClient } from "seyfert";
 import { MessageFlags } from "seyfert/lib/types";
+import { type Database } from "bun:sqlite";
 import { env } from "./env";
-import { initDatabase, closeDatabase, defaultMessageBuffer } from "./memory";
+import {
+  initDatabase,
+  closeDatabase,
+  getDatabase,
+  playerRepo,
+  defaultMessageBuffer,
+} from "./memory";
 import { permissions } from "./middlewares/permissions";
+
+export class BotClient extends Client {
+  db!: Database;
+  repositories!: {
+    player: typeof playerRepo;
+  };
+}
 
 const middlewares = {
   permissions,
@@ -10,12 +24,12 @@ const middlewares = {
 
 declare module "seyfert" {
   interface SeyfertRegistry {
-    client: ParseClient<Client<true>>;
+    client: ParseClient<BotClient>;
     middlewares: typeof middlewares;
   }
 }
 
-const client = new Client({
+const client = new BotClient({
   globalMiddlewares: ["permissions"],
   commands: {
     defaults: {
@@ -55,6 +69,10 @@ if (import.meta.main) {
 
   // Initialize SQLite database and run migrations before connecting
   initDatabase(env.DATABASE_PATH);
+  client.db = getDatabase();
+  client.repositories = {
+    player: playerRepo,
+  };
   client.logger.info(`SQLite memory layer connected at ${env.DATABASE_PATH}`);
 
   client
