@@ -37,9 +37,17 @@ export function runMigrations(database: Database): void {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS role_scopes (
+      guild_id TEXT NOT NULL,
+      role_id TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      PRIMARY KEY (guild_id, role_id, scope)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_player_facts_user_id ON player_facts(user_id);
     CREATE INDEX IF NOT EXISTS idx_player_facts_user_fact ON player_facts(user_id, fact);
     CREATE INDEX IF NOT EXISTS idx_player_facts_recent ON player_facts(user_id, updated_at DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_role_scopes_guild ON role_scopes(guild_id);
   `);
 }
 

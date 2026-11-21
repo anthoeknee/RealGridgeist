@@ -7,6 +7,18 @@ export const envSchema = z.object({
   DEFAULT_AI_PROVIDER: z.enum(["gemini", "groq"]).default("gemini"),
   DATABASE_PATH: z.string().default("./data/bot.sqlite"),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+  DEVELOPER_IDS: z
+    .string()
+    .optional()
+    .transform((val) => {
+      if (!val) return new Set<string>();
+      return new Set(
+        val
+          .split(",")
+          .map((id) => id.trim())
+          .filter(Boolean),
+      );
+    }),
 });
 
 export type Env = z.infer<typeof envSchema>;

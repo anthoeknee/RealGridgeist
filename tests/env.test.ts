@@ -43,6 +43,30 @@ describe("Environment Variable Validation", () => {
     expect(parsed.DEFAULT_AI_PROVIDER).toBe("groq");
   });
 
+  it("parses optional comma-separated DEVELOPER_IDS into a Set<string>", () => {
+    const rawWithDevs = {
+      DISCORD_BOT_TOKEN: "mock-token-123",
+      GEMINI_API_KEY: "mock-gemini-key",
+      DEVELOPER_IDS: " 123456789 , 987654321, , 55555 ",
+    };
+
+    const parsed = parseEnv(rawWithDevs);
+    expect(parsed.DEVELOPER_IDS).toBeInstanceOf(Set);
+    expect(parsed.DEVELOPER_IDS.size).toBe(3);
+    expect(parsed.DEVELOPER_IDS.has("123456789")).toBe(true);
+    expect(parsed.DEVELOPER_IDS.has("987654321")).toBe(true);
+    expect(parsed.DEVELOPER_IDS.has("55555")).toBe(true);
+    expect(parsed.DEVELOPER_IDS.has("")).toBe(false);
+
+    const rawWithoutDevs = {
+      DISCORD_BOT_TOKEN: "mock-token-123",
+      GEMINI_API_KEY: "mock-gemini-key",
+    };
+    const parsedDefault = parseEnv(rawWithoutDevs);
+    expect(parsedDefault.DEVELOPER_IDS).toBeInstanceOf(Set);
+    expect(parsedDefault.DEVELOPER_IDS.size).toBe(0);
+  });
+
   it("throws descriptive error when required variables are missing", () => {
     const invalidRaw = {
       DISCORD_BOT_TOKEN: "",

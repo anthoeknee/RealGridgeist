@@ -1,3 +1,5 @@
+import { isDeveloper } from "../permissions";
+
 export interface RateLimiterOptions {
   limit?: number;
   windowMs?: number;
@@ -110,6 +112,15 @@ export class SlidingWindowRateLimiter {
    * Checks the user's current rate limit status without recording a request.
    */
   public check(userId: string, now: number = Date.now()): RateLimitResult {
+    if (isDeveloper(userId)) {
+      return {
+        allowed: true,
+        remaining: this.limit,
+        retryAfterMs: 0,
+        resetMs: 0,
+      };
+    }
+
     const valid = this.getValidTimestamps(userId, now);
     const count = valid.length;
     const allowed = count < this.limit;
@@ -140,6 +151,10 @@ export class SlidingWindowRateLimiter {
    * Returns true if request is allowed, false if rate limited.
    */
   public consume(userId: string, now: number = Date.now()): boolean {
+    if (isDeveloper(userId)) {
+      return true;
+    }
+
     const valid = this.getValidTimestamps(userId, now);
 
     if (valid.length >= this.limit) {

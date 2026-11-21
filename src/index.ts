@@ -1,14 +1,37 @@
 import { Client, type ParseClient } from "seyfert";
+import { MessageFlags } from "seyfert/lib/types";
 import { env } from "./env";
 import { initDatabase, closeDatabase, defaultMessageBuffer } from "./memory";
+import { permissions } from "./middlewares/permissions";
+
+const middlewares = {
+  permissions,
+};
 
 declare module "seyfert" {
   interface SeyfertRegistry {
     client: ParseClient<Client<true>>;
+    middlewares: typeof middlewares;
   }
 }
 
-const client = new Client();
+const client = new Client({
+  globalMiddlewares: ["permissions"],
+  commands: {
+    defaults: {
+      onMiddlewaresError(context, error) {
+        return context.editOrReply({
+          content: `⛔ ${error}`,
+          flags: MessageFlags.Ephemeral,
+        });
+      },
+    },
+  },
+});
+
+client.setServices({
+  middlewares,
+});
 
 export { client };
 
