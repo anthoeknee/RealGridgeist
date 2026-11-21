@@ -1,26 +1,35 @@
 {
   "compilerOptions": {
     /* Environment setup & latest features */
-    "lib": ["ESNext"],
+    "lib": [
+      "ESNext"
+    ],
     "target": "ESNext",
     "module": "ESNext",
     "moduleDetection": "force",
     "moduleResolution": "bundler",
     "allowJs": true,
-    "types": ["bun"],
-
+    "types": [
+      "bun"
+    ],
     /* Strict Type-Checking & Best Practices */
     "strict": true,
     "skipLibCheck": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
-
     /* Decorator Support for Seyfert + Bun */
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
     "noEmit": true
   },
-  "include": ["src/**/*", "seyfert.config.ts"],
-  "exclude": ["node_modules", "dist", "data"]
+  "include": [
+    "src/**/*",
+    "seyfert.config.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "data"
+  ]
 }

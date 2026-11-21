@@ -15,8 +15,8 @@ export type AiProviderName = AiProvider | "genai";
 /**
  * Default configurations for the AI providers
  */
-export const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
-export const DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile";
+export const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
+export const DEFAULT_GROQ_MODEL = "qwen/qwen3.8-27b";
 export const DEFAULT_MODEL = DEFAULT_GEMINI_MODEL;
 export const DEFAULT_TEMPERATURE = 0.7;
 export const DEFAULT_TIMEOUT_MS = 15_000;
@@ -98,10 +98,10 @@ export const setAiClient = setGeminiClient;
  * Retrieves the singleton Groq client or instantiates a new one with the given API key.
  */
 export function getGroqClient(apiKey?: string): Groq {
-  const key = apiKey ?? env.GROQ_API_KEY;
-  if (defaultGroqClient && (!key || key === cachedGroqApiKey)) {
+  if (defaultGroqClient && (!apiKey || apiKey === cachedGroqApiKey)) {
     return defaultGroqClient;
   }
+  const key = apiKey ?? env.GROQ_API_KEY;
   if (!key) {
     throw new Error(
       "GROQ_API_KEY is not configured in environment variables or passed to getGroqClient."
@@ -109,7 +109,7 @@ export function getGroqClient(apiKey?: string): Groq {
   }
   const client = new Groq({ apiKey: key });
   defaultGroqClient = client;
-  cachedGroqApiKey = key;
+  cachedGroqApiKey = apiKey ?? key;
   return client;
 }
 
@@ -485,12 +485,16 @@ export function isTimeoutOrAbortError(err: unknown): boolean {
   if (err instanceof DOMException && err.name === "AbortError") return true;
   if (err instanceof Error) {
     if (err.name === "AbortError" || err.name === "TimeoutError") return true;
+    const status = (err as any).status;
+    if (status === 504 || status === 408) return true;
     const msg = err.message.toLowerCase();
     if (
       msg.includes("abort") ||
       msg.includes("timeout") ||
       msg.includes("timed out") ||
-      msg.includes("deadline exceeded")
+      msg.includes("deadline exceeded") ||
+      msg.includes("deadline_exceeded") ||
+      msg.includes("deadline expired")
     ) {
       return true;
     }

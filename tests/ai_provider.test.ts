@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { z } from "zod";
 import type { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import type Groq from "groq-sdk";
+import { env } from "../src/env";
 import {
   generateChatReply,
   generateStructuredOutput,
@@ -545,7 +546,13 @@ describe("AI Provider Module (src/ai/provider.ts)", () => {
 
     it("getGroqClient throws descriptive error when no API key is provided", () => {
       setGroqClient(null);
-      expect(() => getGroqClient()).toThrow("GROQ_API_KEY is not configured");
+      const originalGroqKey = env.GROQ_API_KEY;
+      try {
+        (env as any).GROQ_API_KEY = undefined;
+        expect(() => getGroqClient()).toThrow("GROQ_API_KEY is not configured");
+      } finally {
+        (env as any).GROQ_API_KEY = originalGroqKey;
+      }
     });
   });
 
