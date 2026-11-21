@@ -1,12 +1,23 @@
 import { GoogleGenAI, type Content, type GenerateContentConfig } from "@google/genai";
+import Groq from "groq-sdk";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { env } from "../env";
 
 /**
- * Default configurations for the AI provider
+ * Supported AI API providers.
+ * Primary: "gemini" (@google/genai)
+ * Secondary: "groq" (groq-sdk)
  */
-export const DEFAULT_MODEL = "gemini-2.5-flash";
+export type AiProvider = "gemini" | "groq";
+export type AiProviderName = AiProvider | "genai";
+
+/**
+ * Default configurations for the AI providers
+ */
+export const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+export const DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile";
+export const DEFAULT_MODEL = DEFAULT_GEMINI_MODEL;
 export const DEFAULT_TEMPERATURE = 0.7;
 export const DEFAULT_TIMEOUT_MS = 15_000;
 
@@ -22,27 +33,125 @@ export const FALLBACK_MESSAGES = {
     "*A brief power surge echoes through the circuitry. My connection to the datastream glitched—let's try that again.*",
 } as const;
 
-let defaultClient: GoogleGenAI | null = null;
+let defaultGeminiClient: GoogleGenAI | null = null;
+let cachedGeminiApiKey: string | undefined = undefined;
+let defaultGroqClient: Groq | null = null;
+let cachedGroqApiKey: string | undefined = undefined;
+let currentDefaultProvider: AiProvider =
+  (env.DEFAULT_AI_PROVIDER as AiProvider) ?? "gemini";
+
+/**
+ * Normalizes provider name aliases (e.g. 'genai' -> 'gemini').
+ */
+export function normalizeProvider(provider: AiProviderName): AiProvider {
+  if (provider === "genai" || provider === "gemini") {
+    return "gemini";
+  }
+  if (provider === "groq") {
+    return "groq";
+  }
+  throw new Error(`Unsupported AI provider: ${provider}`);
+}
+
+/**
+ * Gets the current default AI provider ('gemini' or 'groq').
+ */
+export function getDefaultAiProvider(): AiProvider {
+  return currentDefaultProvider;
+}
+
+/**
+ * Sets the default AI provider ('gemini' or 'groq') for subsequent calls.
+ */
+export function setDefaultAiProvider(provider: AiProviderName): void {
+  currentDefaultProvider = normalizeProvider(provider);
+}
 
 /**
  * Retrieves the singleton GoogleGenAI client or instantiates a new one with the given API key.
  */
-export function getAiClient(apiKey: string = env.GEMINI_API_KEY): GoogleGenAI {
-  if (!defaultClient || apiKey !== env.GEMINI_API_KEY) {
-    const client = new GoogleGenAI({ apiKey });
-    if (apiKey === env.GEMINI_API_KEY) {
-      defaultClient = client;
-    }
-    return client;
+export function getGeminiClient(apiKey: string = env.GEMINI_API_KEY): GoogleGenAI {
+  if (defaultGeminiClient && (!apiKey || apiKey === cachedGeminiApiKey || apiKey === env.GEMINI_API_KEY)) {
+    return defaultGeminiClient;
   }
-  return defaultClient;
+  const client = new GoogleGenAI({ apiKey });
+  defaultGeminiClient = client;
+  cachedGeminiApiKey = apiKey;
+  return client;
 }
 
 /**
  * Allows overriding the default GoogleGenAI client (useful for unit testing and mocking).
  */
-export function setAiClient(client: GoogleGenAI | null): void {
-  defaultClient = client;
+export function setGeminiClient(client: GoogleGenAI | null): void {
+  defaultGeminiClient = client;
+  cachedGeminiApiKey = undefined;
+}
+
+/**
+ * Backwards-compatible aliases for Gemini client access.
+ */
+export const getAiClient = getGeminiClient;
+export const setAiClient = setGeminiClient;
+
+/**
+ * Retrieves the singleton Groq client or instantiates a new one with the given API key.
+ */
+export function getGroqClient(apiKey?: string): Groq {
+  const key = apiKey ?? env.GROQ_API_KEY;
+  if (defaultGroqClient && (!key || key === cachedGroqApiKey)) {
+    return defaultGroqClient;
+  }
+  if (!key) {
+    throw new Error(
+      "GROQ_API_KEY is not configured in environment variables or passed to getGroqClient."
+    );
+  }
+  const client = new Groq({ apiKey: key });
+  defaultGroqClient = client;
+  cachedGroqApiKey = key;
+  return client;
+}
+
+/**
+ * Allows overriding the default Groq client (useful for unit testing and mocking).
+ */
+export function setGroqClient(client: Groq | null): void {
+  defaultGroqClient = client;
+  cachedGroqApiKey = undefined;
+}
+
+/**
+ * Resets all singleton clients and resets default provider to environment setting.
+ */
+export function resetAiClients(): void {
+  defaultGeminiClient = null;
+  cachedGeminiApiKey = undefined;
+  defaultGroqClient = null;
+  cachedGroqApiKey = undefined;
+  currentDefaultProvider = (env.DEFAULT_AI_PROVIDER as AiProvider) ?? "gemini";
+}
+
+/**
+ * Resolves the provider to use given explicit options and client instances.
+ */
+export function resolveProvider(options: {
+  provider?: AiProviderName;
+  client?: GoogleGenAI | Groq | unknown;
+}): AiProvider {
+  if (options.provider) {
+    return normalizeProvider(options.provider);
+  }
+  if (options.client) {
+    const client = options.client as any;
+    if (client.chat && typeof client.chat.completions?.create === "function") {
+      return "groq";
+    }
+    if (client.models && typeof client.models.generateContent === "function") {
+      return "gemini";
+    }
+  }
+  return getDefaultAiProvider();
 }
 
 /**
@@ -54,6 +163,14 @@ export interface ChatHistoryMessage {
 }
 
 /**
+ * Represents a normalized message for Groq (OpenAI-compatible).
+ */
+export interface GroqMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+/**
  * Represents any supported turn format for conversation history,
  * including native GenAI Content objects, buffered channel messages, or simplified messages.
  */
@@ -61,15 +178,20 @@ export type ConversationTurn =
   | ChatHistoryMessage
   | Content
   | {
-      isBot?: boolean;
-      authorName?: string;
-      content: string;
-    };
+    isBot?: boolean;
+    authorName?: string;
+    content: string;
+  };
 
 /**
  * Options for generating a natural language chat reply.
  */
 export interface GenerateChatReplyOptions {
+  /**
+   * The AI provider to use ('gemini' | 'groq' | 'genai'). Defaults to current default provider.
+   */
+  provider?: AiProviderName;
+
   /**
    * System instruction defining Gridgeist's persona, lore, tone, and guardrails.
    */
@@ -101,14 +223,14 @@ export interface GenerateChatReplyOptions {
   timeout?: number;
 
   /**
-   * The Gemini model identifier. Defaults to 'gemini-2.5-flash'.
+   * Model identifier. Defaults to provider default (Gemini: gemini-2.5-flash, Groq: llama-3.3-70b-versatile).
    */
   model?: string;
 
   /**
-   * Optional custom GoogleGenAI client instance.
+   * Optional custom client instance (GoogleGenAI or Groq).
    */
-  client?: GoogleGenAI;
+  client?: GoogleGenAI | Groq;
 
   /**
    * Optional custom in-character fallback message to return on failure.
@@ -120,6 +242,11 @@ export interface GenerateChatReplyOptions {
  * Options for generating structured JSON output constrained and validated by a Zod schema.
  */
 export interface GenerateStructuredOutputOptions<T> {
+  /**
+   * The AI provider to use ('gemini' | 'groq' | 'genai'). Defaults to current default provider.
+   */
+  provider?: AiProviderName;
+
   /**
    * The user prompt or instructions specifying what data to extract or generate.
    */
@@ -151,14 +278,14 @@ export interface GenerateStructuredOutputOptions<T> {
   timeout?: number;
 
   /**
-   * The Gemini model identifier. Defaults to 'gemini-2.5-flash'.
+   * Model identifier. Defaults to provider default.
    */
   model?: string;
 
   /**
-   * Optional custom GoogleGenAI client instance.
+   * Optional custom client instance (GoogleGenAI or Groq).
    */
-  client?: GoogleGenAI;
+  client?: GoogleGenAI | Groq;
 
   /**
    * Optional fallback value returned if generation, parsing, or validation fails.
@@ -171,15 +298,22 @@ export interface GenerateStructuredOutputOptions<T> {
  */
 export function cleanJsonString(str: string): string {
   let cleaned = str.trim();
-  if (cleaned.startsWith("```json")) {
-    cleaned = cleaned.slice(7);
-  } else if (cleaned.startsWith("```")) {
-    cleaned = cleaned.slice(3);
+  const fenceRegex = /```(?:json)?\s*([\s\S]*?)\s*```/;
+  const match = cleaned.match(fenceRegex);
+  if (match && match[1]) {
+    cleaned = match[1].trim();
+  } else {
+    if (cleaned.startsWith("```json")) {
+      cleaned = cleaned.slice(7);
+    } else if (cleaned.startsWith("```")) {
+      cleaned = cleaned.slice(3);
+    }
+    if (cleaned.endsWith("```")) {
+      cleaned = cleaned.slice(0, -3);
+    }
+    cleaned = cleaned.trim();
   }
-  if (cleaned.endsWith("```")) {
-    cleaned = cleaned.slice(0, -3);
-  }
-  return cleaned.trim();
+  return cleaned;
 }
 
 /**
@@ -192,6 +326,18 @@ export function zodToGeminiSchema(schema: z.ZodTypeAny): Record<string, unknown>
   }) as Record<string, unknown>;
 
   // Clean out top-level $schema property which Gemini API rejects
+  const { $schema, ...cleaned } = raw;
+  return cleaned;
+}
+
+/**
+ * Converts a Zod schema into a Groq-compatible JSON schema definition.
+ */
+export function zodToGroqSchema(schema: z.ZodTypeAny): Record<string, unknown> {
+  const raw = zodToJsonSchema(schema, {
+    $refStrategy: "none",
+  }) as Record<string, unknown>;
+
   const { $schema, ...cleaned } = raw;
   return cleaned;
 }
@@ -271,6 +417,67 @@ export function buildChatContents(
 }
 
 /**
+ * Formats and normalizes conversation history and latest user message
+ * into Groq (OpenAI-compatible) message objects.
+ */
+export function buildGroqMessages(
+  userMessage: string,
+  history?: ConversationTurn[],
+  systemPrompt?: string
+): GroqMessage[] {
+  const messages: GroqMessage[] = [];
+
+  if (systemPrompt && systemPrompt.trim().length > 0) {
+    messages.push({
+      role: "system",
+      content: systemPrompt.trim(),
+    });
+  }
+
+  if (history && history.length > 0) {
+    for (const turn of history) {
+      if (!turn) continue;
+
+      if ("parts" in turn && Array.isArray(turn.parts)) {
+        const text = turn.parts
+          .map((p) => {
+            if ("text" in p && typeof p.text === "string") return p.text;
+            return "";
+          })
+          .filter(Boolean)
+          .join("\n");
+
+        if (text) {
+          const role = turn.role === "model" ? "assistant" : "user";
+          messages.push({ role, content: text });
+        }
+      } else if ("content" in turn) {
+        if ("role" in turn && turn.role) {
+          const role =
+            turn.role === "model" || turn.role === "assistant" ? "assistant" : "user";
+          messages.push({ role, content: turn.content });
+        } else {
+          const authorName = "authorName" in turn ? turn.authorName : undefined;
+          const isBot = "isBot" in turn ? Boolean(turn.isBot) : false;
+          const text = authorName && !isBot ? `${authorName}: ${turn.content}` : turn.content;
+          messages.push({
+            role: isBot ? "assistant" : "user",
+            content: text,
+          });
+        }
+      }
+    }
+  }
+
+  messages.push({
+    role: "user",
+    content: userMessage,
+  });
+
+  return messages;
+}
+
+/**
  * Checks if an error represents an abort or timeout condition.
  */
 export function isTimeoutOrAbortError(err: unknown): boolean {
@@ -301,24 +508,22 @@ export function isSafetyErrorMessage(msg: string): boolean {
     upper.includes("BLOCKED") ||
     upper.includes("PROHIBITED") ||
     upper.includes("CONTENT_FILTER") ||
-    upper.includes("FILTERED")
+    upper.includes("FILTERED") ||
+    upper.includes("CONTENT POLICY") ||
+    upper.includes("VIOLATES")
   );
 }
 
 /**
- * Generates an in-character chat reply using Gemini, supporting configurable temperature,
- * timeouts, system instructions, and conversation history.
- *
- * Catches all internal errors, timeouts, and safety blocks gracefully, returning an in-character
- * message rather than throwing an unhandled exception.
+ * Generates chat reply using Google GenAI (Gemini).
  */
-export async function generateChatReply(
+export async function generateGeminiChatReply(
   options: GenerateChatReplyOptions
 ): Promise<string> {
   const effectiveTimeoutMs = options.timeoutMs ?? options.timeout ?? DEFAULT_TIMEOUT_MS;
   const effectiveTemperature = options.temperature ?? DEFAULT_TEMPERATURE;
-  const effectiveModel = options.model ?? DEFAULT_MODEL;
-  const client = options.client ?? getAiClient();
+  const effectiveModel = options.model ?? DEFAULT_GEMINI_MODEL;
+  const client = (options.client as GoogleGenAI) ?? getGeminiClient();
 
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -371,7 +576,7 @@ export async function generateChatReply(
 
     if (isBlocked) {
       console.warn(
-        `[AI Provider] Chat generation blocked by safety filters (blockReason: ${blockReason}, finishReason: ${finishReason})`
+        `[AI Provider: Gemini] Chat generation blocked by safety filters (blockReason: ${blockReason}, finishReason: ${finishReason})`
       );
       return options.fallbackMessage ?? FALLBACK_MESSAGES.SAFETY_BLOCKED;
     }
@@ -379,7 +584,7 @@ export async function generateChatReply(
     const replyText = response.text?.trim();
     if (!replyText) {
       console.warn(
-        `[AI Provider] Chat generation returned empty text (finishReason: ${finishReason ?? "unknown"})`
+        `[AI Provider: Gemini] Chat generation returned empty text (finishReason: ${finishReason ?? "unknown"})`
       );
       return options.fallbackMessage ?? FALLBACK_MESSAGES.GENERIC_ERROR;
     }
@@ -387,17 +592,17 @@ export async function generateChatReply(
     return replyText;
   } catch (error) {
     if (isTimeoutOrAbortError(error)) {
-      console.warn(`[AI Provider] Chat generation timed out after ${effectiveTimeoutMs}ms`);
+      console.warn(`[AI Provider: Gemini] Chat generation timed out after ${effectiveTimeoutMs}ms`);
       return options.fallbackMessage ?? FALLBACK_MESSAGES.TIMEOUT;
     }
 
     const message = error instanceof Error ? error.message : String(error);
     if (isSafetyErrorMessage(message)) {
-      console.warn(`[AI Provider] Chat generation blocked with error: ${message}`);
+      console.warn(`[AI Provider: Gemini] Chat generation blocked with error: ${message}`);
       return options.fallbackMessage ?? FALLBACK_MESSAGES.SAFETY_BLOCKED;
     }
 
-    console.error("[AI Provider] Unexpected error during generateChatReply:", error);
+    console.error("[AI Provider: Gemini] Unexpected error during generateChatReply:", error);
     return options.fallbackMessage ?? FALLBACK_MESSAGES.GENERIC_ERROR;
   } finally {
     if (timer !== undefined) {
@@ -407,25 +612,119 @@ export async function generateChatReply(
 }
 
 /**
- * Generates structured JSON output from Gemini, enforced by responseJsonSchema at the model level
- * and strictly validated at runtime using Zod.
- *
- * If generation, network, timeout, or Zod validation fails, gracefully returns the provided fallback
- * or null without throwing an unhandled exception.
+ * Generates chat reply using Groq (groq-sdk).
  */
-export async function generateStructuredOutput<T>(
-  options: GenerateStructuredOutputOptions<T> & { fallback: T }
-): Promise<T>;
-export async function generateStructuredOutput<T>(
-  options: GenerateStructuredOutputOptions<T>
-): Promise<T | null>;
-export async function generateStructuredOutput<T>(
+export async function generateGroqChatReply(
+  options: GenerateChatReplyOptions
+): Promise<string> {
+  const effectiveTimeoutMs = options.timeoutMs ?? options.timeout ?? DEFAULT_TIMEOUT_MS;
+  const effectiveTemperature = options.temperature ?? DEFAULT_TEMPERATURE;
+  const effectiveModel = options.model ?? DEFAULT_GROQ_MODEL;
+  const client = (options.client as Groq) ?? getGroqClient();
+
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    const messages = buildGroqMessages(
+      options.userMessage,
+      options.conversationHistory,
+      options.systemPrompt
+    );
+
+    const generatePromise = client.chat.completions.create(
+      {
+        model: effectiveModel,
+        messages: messages as any,
+        temperature: effectiveTemperature,
+      },
+      {
+        signal: controller.signal,
+        timeout: effectiveTimeoutMs,
+      }
+    );
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        const err = new Error(`Request timed out after ${effectiveTimeoutMs}ms`);
+        err.name = "TimeoutError";
+        reject(err);
+      }, effectiveTimeoutMs);
+      if (timer && typeof (timer as any).unref === "function") {
+        (timer as any).unref();
+      }
+    });
+
+    const response = await Promise.race([generatePromise, timeoutPromise]);
+
+    const choice = response.choices?.[0];
+    const finishReason = choice?.finish_reason;
+
+    if ((finishReason as string) === "content_filter") {
+      console.warn(
+        `[AI Provider: Groq] Chat generation blocked by safety filters (finish_reason: ${finishReason})`
+      );
+      return options.fallbackMessage ?? FALLBACK_MESSAGES.SAFETY_BLOCKED;
+    }
+
+    const replyText = choice?.message?.content?.trim();
+    if (!replyText) {
+      console.warn(
+        `[AI Provider: Groq] Chat generation returned empty text (finishReason: ${finishReason ?? "unknown"})`
+      );
+      return options.fallbackMessage ?? FALLBACK_MESSAGES.GENERIC_ERROR;
+    }
+
+    return replyText;
+  } catch (error) {
+    if (isTimeoutOrAbortError(error)) {
+      console.warn(`[AI Provider: Groq] Chat generation timed out after ${effectiveTimeoutMs}ms`);
+      return options.fallbackMessage ?? FALLBACK_MESSAGES.TIMEOUT;
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    if (isSafetyErrorMessage(message)) {
+      console.warn(`[AI Provider: Groq] Chat generation blocked with error: ${message}`);
+      return options.fallbackMessage ?? FALLBACK_MESSAGES.SAFETY_BLOCKED;
+    }
+
+    console.error("[AI Provider: Groq] Unexpected error during generateChatReply:", error);
+    return options.fallbackMessage ?? FALLBACK_MESSAGES.GENERIC_ERROR;
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/**
+ * Generates an in-character chat reply using the selected provider (Gemini or Groq).
+ * Supports configurable temperature, timeouts, system instructions, and conversation history.
+ *
+ * Catches all internal errors, timeouts, and safety blocks gracefully, returning an in-character
+ * message rather than throwing an unhandled exception.
+ */
+export async function generateChatReply(
+  options: GenerateChatReplyOptions
+): Promise<string> {
+  const provider = resolveProvider(options);
+  if (provider === "groq") {
+    return generateGroqChatReply(options);
+  }
+  return generateGeminiChatReply(options);
+}
+
+/**
+ * Generates structured JSON output from Gemini.
+ */
+export async function generateGeminiStructuredOutput<T>(
   options: GenerateStructuredOutputOptions<T>
 ): Promise<T | null> {
   const effectiveTimeoutMs = options.timeoutMs ?? options.timeout ?? DEFAULT_TIMEOUT_MS;
   const effectiveTemperature = options.temperature ?? 0.1;
-  const effectiveModel = options.model ?? DEFAULT_MODEL;
-  const client = options.client ?? getAiClient();
+  const effectiveModel = options.model ?? DEFAULT_GEMINI_MODEL;
+  const client = (options.client as GoogleGenAI) ?? getGeminiClient();
 
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -465,7 +764,6 @@ export async function generateStructuredOutput<T>(
 
     const response = await Promise.race([generatePromise, timeoutPromise]);
 
-    // Inspect candidate and prompt feedback for safety blocks
     const candidate = response.candidates?.[0];
     const blockReason = response.promptFeedback?.blockReason;
     const finishReason = candidate?.finishReason;
@@ -480,7 +778,7 @@ export async function generateStructuredOutput<T>(
 
     if (isBlocked) {
       console.warn(
-        `[AI Provider] Structured generation blocked by safety filters (blockReason: ${blockReason}, finishReason: ${finishReason})`
+        `[AI Provider: Gemini] Structured generation blocked by safety filters (blockReason: ${blockReason}, finishReason: ${finishReason})`
       );
       return options.fallback ?? null;
     }
@@ -488,7 +786,7 @@ export async function generateStructuredOutput<T>(
     const rawText = response.text?.trim();
     if (!rawText) {
       console.warn(
-        `[AI Provider] Structured generation returned empty text (finishReason: ${finishReason ?? "unknown"})`
+        `[AI Provider: Gemini] Structured generation returned empty text (finishReason: ${finishReason ?? "unknown"})`
       );
       return options.fallback ?? null;
     }
@@ -500,13 +798,13 @@ export async function generateStructuredOutput<T>(
     return validated;
   } catch (error) {
     if (isTimeoutOrAbortError(error)) {
-      console.warn(`[AI Provider] Structured generation timed out after ${effectiveTimeoutMs}ms`);
+      console.warn(`[AI Provider: Gemini] Structured generation timed out after ${effectiveTimeoutMs}ms`);
     } else if (error instanceof z.ZodError) {
-      console.warn("[AI Provider] Structured output failed Zod validation:", error.format());
+      console.warn("[AI Provider: Gemini] Structured output failed Zod validation:", error.format());
     } else if (error instanceof SyntaxError) {
-      console.warn("[AI Provider] Structured output failed JSON parsing:", error.message);
+      console.warn("[AI Provider: Gemini] Structured output failed JSON parsing:", error.message);
     } else {
-      console.error("[AI Provider] Unexpected error during generateStructuredOutput:", error);
+      console.error("[AI Provider: Gemini] Unexpected error during generateStructuredOutput:", error);
     }
 
     return options.fallback ?? null;
@@ -515,4 +813,129 @@ export async function generateStructuredOutput<T>(
       clearTimeout(timer);
     }
   }
+}
+
+/**
+ * Generates structured JSON output from Groq.
+ */
+export async function generateGroqStructuredOutput<T>(
+  options: GenerateStructuredOutputOptions<T>
+): Promise<T | null> {
+  const effectiveTimeoutMs = options.timeoutMs ?? options.timeout ?? DEFAULT_TIMEOUT_MS;
+  const effectiveTemperature = options.temperature ?? 0.1;
+  const effectiveModel = options.model ?? DEFAULT_GROQ_MODEL;
+  const client = (options.client as Groq) ?? getGroqClient();
+
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    const jsonSchema = zodToGroqSchema(options.schema);
+
+    const systemPromptText =
+      options.systemPrompt && options.systemPrompt.trim().length > 0
+        ? `${options.systemPrompt.trim()}\nYou must return only valid JSON adhering to the provided JSON schema.`
+        : `You are a structured data extractor. You must return only valid JSON adhering to the provided JSON schema.`;
+
+    const messages = [
+      { role: "system" as const, content: systemPromptText },
+      { role: "user" as const, content: options.prompt },
+    ];
+
+    const generatePromise = client.chat.completions.create(
+      {
+        model: effectiveModel,
+        messages: messages as any,
+        temperature: effectiveTemperature,
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "structured_output",
+            schema: jsonSchema,
+          },
+        },
+      },
+      {
+        signal: controller.signal,
+        timeout: effectiveTimeoutMs,
+      }
+    );
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        const err = new Error(`Request timed out after ${effectiveTimeoutMs}ms`);
+        err.name = "TimeoutError";
+        reject(err);
+      }, effectiveTimeoutMs);
+      if (timer && typeof (timer as any).unref === "function") {
+        (timer as any).unref();
+      }
+    });
+
+    const response = await Promise.race([generatePromise, timeoutPromise]);
+
+    const choice = response.choices?.[0];
+    const finishReason = choice?.finish_reason;
+
+    if ((finishReason as string) === "content_filter") {
+      console.warn(
+        `[AI Provider: Groq] Structured generation blocked by safety filters (finish_reason: ${finishReason})`
+      );
+      return options.fallback ?? null;
+    }
+
+    const rawText = choice?.message?.content?.trim();
+    if (!rawText) {
+      console.warn(
+        `[AI Provider: Groq] Structured generation returned empty text (finishReason: ${finishReason ?? "unknown"})`
+      );
+      return options.fallback ?? null;
+    }
+
+    const cleanedText = cleanJsonString(rawText);
+    const parsedJson = JSON.parse(cleanedText);
+    const validated = options.schema.parse(parsedJson);
+
+    return validated;
+  } catch (error) {
+    if (isTimeoutOrAbortError(error)) {
+      console.warn(`[AI Provider: Groq] Structured generation timed out after ${effectiveTimeoutMs}ms`);
+    } else if (error instanceof z.ZodError) {
+      console.warn("[AI Provider: Groq] Structured output failed Zod validation:", error.format());
+    } else if (error instanceof SyntaxError) {
+      console.warn("[AI Provider: Groq] Structured output failed JSON parsing:", error.message);
+    } else {
+      console.error("[AI Provider: Groq] Unexpected error during generateStructuredOutput:", error);
+    }
+
+    return options.fallback ?? null;
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/**
+ * Generates structured JSON output from the selected provider (Gemini or Groq),
+ * enforced by schema definitions at the model level and strictly validated at runtime using Zod.
+ *
+ * If generation, network, timeout, or Zod validation fails, gracefully returns the provided fallback
+ * or null without throwing an unhandled exception.
+ */
+export async function generateStructuredOutput<T>(
+  options: GenerateStructuredOutputOptions<T> & { fallback: T }
+): Promise<T>;
+export async function generateStructuredOutput<T>(
+  options: GenerateStructuredOutputOptions<T>
+): Promise<T | null>;
+export async function generateStructuredOutput<T>(
+  options: GenerateStructuredOutputOptions<T>
+): Promise<T | null> {
+  const provider = resolveProvider(options);
+  if (provider === "groq") {
+    return generateGroqStructuredOutput(options);
+  }
+  return generateGeminiStructuredOutput(options);
 }

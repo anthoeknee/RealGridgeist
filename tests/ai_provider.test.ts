@@ -1,20 +1,37 @@
 import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { z } from "zod";
 import type { GoogleGenAI, GenerateContentResponse } from "@google/genai";
+import type Groq from "groq-sdk";
 import {
   generateChatReply,
   generateStructuredOutput,
   buildChatContents,
+  buildGroqMessages,
   cleanJsonString,
   zodToGeminiSchema,
+  zodToGroqSchema,
   isTimeoutOrAbortError,
   isSafetyErrorMessage,
   FALLBACK_MESSAGES,
   DEFAULT_MODEL,
+  DEFAULT_GEMINI_MODEL,
+  DEFAULT_GROQ_MODEL,
   DEFAULT_TEMPERATURE,
   DEFAULT_TIMEOUT_MS,
   getAiClient,
   setAiClient,
+  getGeminiClient,
+  setGeminiClient,
+  getGroqClient,
+  setGroqClient,
+  getDefaultAiProvider,
+  setDefaultAiProvider,
+  resetAiClients,
+  resolveProvider,
+  generateGeminiChatReply,
+  generateGroqChatReply,
+  generateGeminiStructuredOutput,
+  generateGroqStructuredOutput,
 } from "../src/ai/provider";
 
 function createMockResponse(options: {
@@ -39,13 +56,41 @@ function createMockResponse(options: {
   } as unknown as GenerateContentResponse;
 }
 
+function createMockGroqChatCompletion(options: {
+  content?: string;
+  finishReason?: string;
+}) {
+  return {
+    id: "chatcmpl-test-123",
+    object: "chat.completion",
+    created: Date.now(),
+    model: DEFAULT_GROQ_MODEL,
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: "assistant",
+          content: options.content ?? null,
+        },
+        finish_reason: options.finishReason ?? "stop",
+        logprobs: null,
+      },
+    ],
+    usage: {
+      prompt_tokens: 10,
+      completion_tokens: 20,
+      total_tokens: 30,
+    },
+  };
+}
+
 describe("AI Provider Module (src/ai/provider.ts)", () => {
   beforeEach(() => {
-    setAiClient(null);
+    resetAiClients();
   });
 
   afterEach(() => {
-    setAiClient(null);
+    resetAiClients();
   });
 
   describe("Schema and Utility Functions", () => {
@@ -485,6 +530,513 @@ describe("AI Provider Module (src/ai/provider.ts)", () => {
       const customMock = {} as GoogleGenAI;
       setAiClient(customMock);
       expect(getAiClient()).toBe(customMock);
+      expect(getGeminiClient()).toBe(customMock);
+    });
+
+    it("getGroqClient caches client instance and setGroqClient allows overriding", () => {
+      const client1 = getGroqClient("test-groq-key");
+      const client2 = getGroqClient("test-groq-key");
+      expect(client1).toBe(client2);
+
+      const customMock = {} as Groq;
+      setGroqClient(customMock);
+      expect(getGroqClient()).toBe(customMock);
+    });
+
+    it("getGroqClient throws descriptive error when no API key is provided", () => {
+      setGroqClient(null);
+      expect(() => getGroqClient()).toThrow("GROQ_API_KEY is not configured");
+    });
+  });
+
+  describe("Groq Message Normalization (buildGroqMessages)", () => {
+    it("creates a single user message when no system prompt or history is provided", () => {
+      const messages = buildGroqMessages("Hello Gridgeist!");
+      expect(messages).toEqual([{ role: "user", content: "Hello Gridgeist!" }]);
+    });
+
+    it("prepends system message when systemPrompt is provided", () => {
+      const messages = buildGroqMessages("Status?", undefined, "You are Gridgeist.");
+      expect(messages).toEqual([
+        { role: "system", content: "You are Gridgeist." },
+        { role: "user", content: "Status?", },
+      ]);
+    });
+
+    it("maps conversation history with user, assistant, and model roles to OpenAI/Groq format", () => {
+      const history = [
+        { role: "user" as const, content: "Are you ready?" },
+        { role: "model" as const, content: "Systems online." },
+        { role: "assistant" as const, content: "Ready for command." },
+      ];
+
+      const messages = buildGroqMessages("Execute protocol 9.", history, "Base prompt.");
+      expect(messages.length).toBe(5);
+      expect(messages[0]).toEqual({ role: "system", content: "Base prompt." });
+      expect(messages[1]).toEqual({ role: "user", content: "Are you ready?" });
+      expect(messages[2]).toEqual({ role: "assistant", content: "Systems online." });
+      expect(messages[3]).toEqual({ role: "assistant", content: "Ready for command." });
+      expect(messages[4]).toEqual({ role: "user", content: "Execute protocol 9." });
+    });
+
+    it("formats buffered channel messages with speaker names for human messages", () => {
+      const buffer = [
+        { isBot: false, authorName: "Neo", content: "Follow the white rabbit" },
+        { isBot: true, authorName: "Gridgeist", content: "Signal detected." },
+      ];
+
+      const messages = buildGroqMessages("Where is Trinity?", buffer);
+      expect(messages).toEqual([
+        { role: "user", content: "Neo: Follow the white rabbit" },
+        { role: "assistant", content: "Signal detected." },
+        { role: "user", content: "Where is Trinity?" },
+      ]);
+    });
+
+    it("converts GenAI Content parts array into text content for Groq turns", () => {
+      const contentTurns = [
+        {
+          role: "model",
+          parts: [{ text: "Part 1" }, { text: "Part 2" }],
+        },
+      ];
+
+      const messages = buildGroqMessages("Next step?", contentTurns as any);
+      expect(messages).toEqual([
+        { role: "assistant", content: "Part 1\nPart 2" },
+        { role: "user", content: "Next step?" },
+      ]);
+    });
+  });
+
+  describe("Groq Chat Generation (generateGroqChatReply / generateChatReply)", () => {
+    it("successfully generates chat response using Groq provider", async () => {
+      let capturedBody: any = null;
+      let capturedOptions: any = null;
+
+      const mockGroqClient = {
+        chat: {
+          completions: {
+            create: async (body: any, options: any) => {
+              capturedBody = body;
+              capturedOptions = options;
+              return createMockGroqChatCompletion({
+                content: "Groq neural net engaged. Greetings from the secondary stream.",
+                finishReason: "stop",
+              });
+            },
+          },
+        },
+      } as unknown as Groq;
+
+      const reply = await generateChatReply({
+        provider: "groq",
+        client: mockGroqClient,
+        systemPrompt: "You are Gridgeist on Groq.",
+        userMessage: "Wake up!",
+        temperature: 0.6,
+        timeoutMs: 5000,
+      });
+
+      expect(reply).toBe("Groq neural net engaged. Greetings from the secondary stream.");
+      expect(capturedBody).toBeDefined();
+      expect(capturedBody.model).toBe(DEFAULT_GROQ_MODEL);
+      expect(capturedBody.temperature).toBe(0.6);
+      expect(capturedBody.messages).toEqual([
+        { role: "system", content: "You are Gridgeist on Groq." },
+        { role: "user", content: "Wake up!" },
+      ]);
+      expect(capturedOptions.timeout).toBe(5000);
+      expect(capturedOptions.signal).toBeDefined();
+    });
+
+    it("allows overriding Groq model identifier", async () => {
+      let capturedModel = "";
+
+      const mockGroqClient = {
+        chat: {
+          completions: {
+            create: async (body: any) => {
+              capturedModel = body.model;
+              return createMockGroqChatCompletion({ content: "Fast reply." });
+            },
+          },
+        },
+      } as unknown as Groq;
+
+      await generateChatReply({
+        provider: "groq",
+        client: mockGroqClient,
+        model: "llama-3.1-8b-instant",
+        userMessage: "Test",
+      });
+
+      expect(capturedModel).toBe("llama-3.1-8b-instant");
+    });
+
+    it("gracefully returns timeout fallback when Groq request times out", async () => {
+      const mockGroqClient = {
+        chat: {
+          completions: {
+            create: async () => {
+              await new Promise((resolve) => setTimeout(resolve, 150));
+              return createMockGroqChatCompletion({ content: "Too late" });
+            },
+          },
+        },
+      } as unknown as Groq;
+
+      const reply = await generateChatReply({
+        provider: "groq",
+        client: mockGroqClient,
+        userMessage: "Timeout test",
+        timeoutMs: 30,
+      });
+
+      expect(reply).toBe(FALLBACK_MESSAGES.TIMEOUT);
+    });
+
+    it("gracefully returns custom fallbackMessage on Groq timeout", async () => {
+      const mockGroqClient = {
+        chat: {
+          completions: {
+            create: async () => {
+              await new Promise((resolve) => setTimeout(resolve, 150));
+              return createMockGroqChatCompletion({ content: "Late" });
+            },
+          },
+        },
+      } as unknown as Groq;
+
+      const customFallback = "*Groq subsystem offline*";
+      const reply = await generateChatReply({
+        provider: "groq",
+        client: mockGroqClient,
+        userMessage: "Ping",
+        timeoutMs: 30,
+        fallbackMessage: customFallback,
+      });
+
+      expect(reply).toBe(customFallback);
+    });
+
+    it("gracefully returns safety fallback when Groq returns content_filter finish_reason", async () => {
+      const mockGroqClient = {
+        chat: {
+          completions: {
+            create: async () => {
+              return createMockGroqChatCompletion({
+                finishReason: "content_filter",
+              });
+            },
+          },
+        },
+      } as unknown as Groq;
+
+      const reply = await generateChatReply({
+        provider: "groq",
+        client: mockGroqClient,
+        userMessage: "Harmful content",
+      });
+
+      expect(reply).toBe(FALLBACK_MESSAGES.SAFETY_BLOCKED);
+    });
+
+    it("gracefully returns generic fallback on unexpected Groq API error", async () => {
+      const mockGroqClient = {
+        chat: {
+          completions: {
+            create: async () => {
+              throw new Error("HTTP 500 Internal Groq Error");
+            },
+          },
+        },
+      } as unknown as Groq;
+
+      const reply = await generateChatReply({
+        provider: "groq",
+        client: mockGroqClient,
+        userMessage: "Hello",
+      });
+
+      expect(reply).toBe(FALLBACK_MESSAGES.GENERIC_ERROR);
+    });
+
+    it("gracefully returns generic fallback when Groq returns empty content", async () => {
+      const mockGroqClient = {
+        chat: {
+          completions: {
+            create: async () => {
+              return createMockGroqChatCompletion({ content: "" });
+            },
+          },
+        },
+      } as unknown as Groq;
+
+      const reply = await generateChatReply({
+        provider: "groq",
+        client: mockGroqClient,
+        userMessage: "Empty test",
+      });
+
+      expect(reply).toBe(FALLBACK_MESSAGES.GENERIC_ERROR);
+    });
+  });
+
+  describe("Groq Structured Output (generateGroqStructuredOutput / generateStructuredOutput)", () => {
+    const groqExtractionSchema = z.object({
+      affinityDelta: z.number().int().min(-20).max(20),
+      detectedFacts: z.array(z.string()),
+      playerMood: z.enum(["friendly", "neutral", "hostile"]),
+    });
+
+    it("generates and validates structured JSON output with Groq", async () => {
+      let capturedBody: any = null;
+
+      const mockGroqClient = {
+        chat: {
+          completions: {
+            create: async (body: any) => {
+              capturedBody = body;
+              return createMockGroqChatCompletion({
+                content: JSON.stringify({
+                  affinityDelta: 7,
+                  detectedFacts: ["Bob found ancient data fragment"],
+                  playerMood: "friendly",
+                }),
+              });
+            },
+          },
+        },
+      } as unknown as Groq;
+
+      const result = await generateStructuredOutput({
+        provider: "groq",
+        client: mockGroqClient,
+        prompt: "Extract memory facts from: 'Bob: Found the relic!'",
+        schema: groqExtractionSchema,
+      });
+
+      expect(result).not.toBeNull();
+      expect(result?.affinityDelta).toBe(7);
+      expect(result?.detectedFacts).toEqual(["Bob found ancient data fragment"]);
+      expect(result?.playerMood).toBe("friendly");
+
+      expect(capturedBody.response_format.type).toBe("json_schema");
+      expect(capturedBody.response_format.json_schema.name).toBe("structured_output");
+      expect(capturedBody.response_format.json_schema.schema).toBeDefined();
+      expect(capturedBody.response_format.json_schema.schema.$schema).toBeUndefined();
+    });
+
+    it("handles Groq structured output wrapped in markdown code fences", async () => {
+      const mockGroqClient = {
+        chat: {
+          completions: {
+            create: async () => {
+              return createMockGroqChatCompletion({
+                content: "```json\n{\n  \"affinityDelta\": -3,\n  \"detectedFacts\": [\"Frustrated with raid wipe\"],\n  \"playerMood\": \"hostile\"\n}\n```",
+              });
+            },
+          },
+        },
+      } as unknown as Groq;
+
+      const result = await generateStructuredOutput({
+        provider: "groq",
+        client: mockGroqClient,
+        prompt: "Extract facts",
+        schema: groqExtractionSchema,
+      });
+
+      expect(result).not.toBeNull();
+      expect(result?.affinityDelta).toBe(-3);
+      expect(result?.playerMood).toBe("hostile");
+    });
+
+    it("returns null when Groq output fails Zod validation and no fallback provided", async () => {
+      const mockGroqClient = {
+        chat: {
+          completions: {
+            create: async () => {
+              return createMockGroqChatCompletion({
+                content: JSON.stringify({
+                  affinityDelta: 500, // Invalid range
+                  detectedFacts: "invalid",
+                  playerMood: "unknown",
+                }),
+              });
+            },
+          },
+        },
+      } as unknown as Groq;
+
+      const result = await generateStructuredOutput({
+        provider: "groq",
+        client: mockGroqClient,
+        prompt: "Extract facts",
+        schema: groqExtractionSchema,
+      });
+
+      expect(result).toBeNull();
+    });
+
+    it("returns provided fallback when Groq output fails Zod validation", async () => {
+      const mockGroqClient = {
+        chat: {
+          completions: {
+            create: async () => {
+              return createMockGroqChatCompletion({
+                content: "invalid json string",
+              });
+            },
+          },
+        },
+      } as unknown as Groq;
+
+      const fallback = {
+        affinityDelta: 0,
+        detectedFacts: [],
+        playerMood: "neutral" as const,
+      };
+
+      const result = await generateStructuredOutput({
+        provider: "groq",
+        client: mockGroqClient,
+        prompt: "Extract facts",
+        schema: groqExtractionSchema,
+        fallback,
+      });
+
+      expect(result).toEqual(fallback);
+    });
+
+    it("returns fallback on timeout during Groq structured output generation", async () => {
+      const mockGroqClient = {
+        chat: {
+          completions: {
+            create: async () => {
+              await new Promise((resolve) => setTimeout(resolve, 150));
+              return createMockGroqChatCompletion({ content: "{}" });
+            },
+          },
+        },
+      } as unknown as Groq;
+
+      const fallback = {
+        affinityDelta: 0,
+        detectedFacts: [],
+        playerMood: "neutral" as const,
+      };
+
+      const result = await generateStructuredOutput({
+        provider: "groq",
+        client: mockGroqClient,
+        prompt: "Extract facts",
+        schema: groqExtractionSchema,
+        timeoutMs: 30,
+        fallback,
+      });
+
+      expect(result).toEqual(fallback);
+    });
+
+    it("returns null on safety content_filter during Groq structured output", async () => {
+      const mockGroqClient = {
+        chat: {
+          completions: {
+            create: async () => {
+              return createMockGroqChatCompletion({
+                finishReason: "content_filter",
+              });
+            },
+          },
+        },
+      } as unknown as Groq;
+
+      const result = await generateStructuredOutput({
+        provider: "groq",
+        client: mockGroqClient,
+        prompt: "Extract facts from flagged input",
+        schema: groqExtractionSchema,
+      });
+
+      expect(result).toBeNull();
+    });
+  });
+
+  describe("Provider Routing and Default Provider Control", () => {
+    it("resolveProvider correctly determines provider from options, client, or default", () => {
+      expect(resolveProvider({ provider: "gemini" })).toBe("gemini");
+      expect(resolveProvider({ provider: "genai" })).toBe("gemini");
+      expect(resolveProvider({ provider: "groq" })).toBe("groq");
+
+      const mockGeminiClient = { models: { generateContent: async () => {} } };
+      expect(resolveProvider({ client: mockGeminiClient })).toBe("gemini");
+
+      const mockGroqClient = { chat: { completions: { create: async () => {} } } };
+      expect(resolveProvider({ client: mockGroqClient })).toBe("groq");
+
+      expect(resolveProvider({})).toBe(getDefaultAiProvider());
+    });
+
+    it("allows switching default provider dynamically with setDefaultAiProvider", () => {
+      expect(getDefaultAiProvider()).toBe("gemini");
+
+      setDefaultAiProvider("groq");
+      expect(getDefaultAiProvider()).toBe("groq");
+
+      setDefaultAiProvider("genai");
+      expect(getDefaultAiProvider()).toBe("gemini");
+
+      setDefaultAiProvider("gemini");
+      expect(getDefaultAiProvider()).toBe("gemini");
+    });
+
+    it("routes to Groq automatically when default provider is set to groq", async () => {
+      let groqCalled = false;
+      const mockGroqClient = {
+        chat: {
+          completions: {
+            create: async () => {
+              groqCalled = true;
+              return createMockGroqChatCompletion({ content: "Groq route active" });
+            },
+          },
+        },
+      } as unknown as Groq;
+
+      setGroqClient(mockGroqClient);
+      setDefaultAiProvider("groq");
+
+      const reply = await generateChatReply({
+        userMessage: "Routing check",
+      });
+
+      expect(groqCalled).toBe(true);
+      expect(reply).toBe("Groq route active");
+    });
+
+    it("explicit provider override takes precedence over default provider", async () => {
+      let geminiCalled = false;
+      const mockGeminiClient = {
+        models: {
+          generateContent: async () => {
+            geminiCalled = true;
+            return createMockResponse({ text: "Gemini override reply" });
+          },
+        },
+      } as unknown as GoogleGenAI;
+
+      setGeminiClient(mockGeminiClient);
+      setDefaultAiProvider("groq"); // default is groq, but option specifies gemini
+
+      const reply = await generateChatReply({
+        provider: "gemini",
+        userMessage: "Override check",
+      });
+
+      expect(geminiCalled).toBe(true);
+      expect(reply).toBe("Gemini override reply");
     });
   });
 });

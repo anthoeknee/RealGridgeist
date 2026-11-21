@@ -26,6 +26,21 @@ describe("Environment Variable Validation", () => {
     const parsed = parseEnv(minimalRaw);
     expect(parsed.DATABASE_PATH).toBe("./data/bot.sqlite");
     expect(parsed.NODE_ENV).toBe("development");
+    expect(parsed.DEFAULT_AI_PROVIDER).toBe("gemini");
+    expect(parsed.GROQ_API_KEY).toBeUndefined();
+  });
+
+  it("parses optional GROQ_API_KEY and custom DEFAULT_AI_PROVIDER", () => {
+    const groqRaw = {
+      DISCORD_BOT_TOKEN: "mock-token-123",
+      GEMINI_API_KEY: "mock-gemini-key",
+      GROQ_API_KEY: "mock-groq-key",
+      DEFAULT_AI_PROVIDER: "groq",
+    };
+
+    const parsed = parseEnv(groqRaw);
+    expect(parsed.GROQ_API_KEY).toBe("mock-groq-key");
+    expect(parsed.DEFAULT_AI_PROVIDER).toBe("groq");
   });
 
   it("throws descriptive error when required variables are missing", () => {
